@@ -56,5 +56,18 @@ adb devices
 npx expo run:android --device
 ```
 
-On first launch: tap **Open settings** to grant *Do Not Disturb access*, return
-to the app, then **Start service**. Lay the phone face down to trigger Shhh.
+On first launch, complete the on-screen checklist before **Start service** is enabled:
+1. **Do Not Disturb access** — required to toggle DND.
+2. **Unrestricted battery** — required; stops Android Doze from killing the service.
+3. **Auto-start** (OEM devices only — Xiaomi/Oppo/Vivo/Huawei/OnePlus/Samsung) —
+   the app deep-links you to the manufacturer's Auto-start / protected-apps
+   screen and asks you to confirm, since this setting can't be read or set by
+   any app API.
+
+Then lay the phone face down to trigger Shhh.
+
+> ### Why the battery/auto-start gates matter
+> A foreground service survives being swiped from recents on **stock Android**.
+> On OEM skins, their proprietary battery managers kill it anyway unless the app
+> is battery-unrestricted **and** allowed to auto-start. The app now enforces the
+> parts it can detect and guides you through the part it can't.

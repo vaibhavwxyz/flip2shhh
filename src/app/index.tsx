@@ -5,6 +5,7 @@ import {
   PermissionsAndroid,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -32,15 +33,30 @@ const C = {
 
 export default function HomeScreen() {
   const [dndGranted, setDndGranted] = useState(false);
+  const [batteryOk, setBatteryOk] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isShushing, setIsShushing] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // OEM auto-start is a manual, un-queryable step — track device support once
+  // and whether the user has confirmed they completed it.
+  const [hasAutoStart, setHasAutoStart] = useState(false);
+  const [manufacturer, setManufacturer] = useState('');
+  const [autoStartAck, setAutoStartAck] = useState(false);
+
   const refresh = useCallback(() => {
     if (Platform.OS !== 'android') return;
     setDndGranted(FlipToShhh.isDndPermissionGranted());
+    setBatteryOk(FlipToShhh.isIgnoringBatteryOptimizations());
     setIsRunning(FlipToShhh.isServiceRunning());
     setIsShushing(FlipToShhh.isShushing());
+  }, []);
+
+  // Device capabilities that don't change at runtime.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    setHasAutoStart(FlipToShhh.hasAutoStartSettings());
+    setManufacturer(FlipToShhh.getManufacturer());
   }, []);
 
   // Initial state + live updates from the native service.
@@ -90,6 +106,19 @@ export default function HomeScreen() {
 
   const phase: Phase = isShushing ? 'shushing' : isRunning ? 'active' : 'inactive';
 
+  // Battery exemption is required (not just recommended) so users can't leave
+  // the service in a state OEM battery managers will silently kill. Where an
+  // OEM auto-start screen exists, we also require the user to confirm that
+  // manual, un-queryable step.
+  const oemStepDone = !hasAutoStart || autoStartAck;
+  const requirementsMet = dndGranted && batteryOk && oemStepDone;
+  const startBlocked = Platform.OS === 'android' && !isRunning && !requirementsMet;
+  const gateHint = !dndGranted
+    ? 'Grant Do Not Disturb access to continue.'
+    : !batteryOk
+      ? 'Allow unrestricted battery to continue.'
+      : 'Confirm the auto-start step to continue.';
+
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -100,30 +129,55 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        <StatusOrb phase={phase} />
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          <StatusOrb phase={phase} />
 
-        {!dndGranted && Platform.OS === 'android' ? (
-          <PermissionCard onPress={() => FlipToShhh.openDndSettings()} />
-        ) : (
-          <View style={styles.permitOk}>
-            <Text style={styles.permitOkText}>✓ Do Not Disturb access granted</Text>
-          </View>
-        )}
+          {Platform.OS === 'android' && (
+            <View style={styles.reqCard}>
+              <CheckRow
+                label="Do Not Disturb access"
+                detail="Required to toggle DND"
+                ok={dndGranted}
+                onFix={() => FlipToShhh.openDndSettings()}
+              />
+              <View style={styles.reqDivider} />
+              <CheckRow
+                label="Unrestricted battery"
+                detail="Required — keeps it alive after swipe-away"
+                ok={batteryOk}
+                onFix={() => FlipToShhh.requestIgnoreBatteryOptimizations()}
+              />
+            </View>
+          )}
 
-        <View style={{ flex: 1 }} />
+          {Platform.OS === 'android' && hasAutoStart && (
+            <OemCard
+              manufacturer={manufacturer}
+              acked={autoStartAck}
+              onOpen={() => FlipToShhh.openAutoStartSettings()}
+              onToggleAck={() => setAutoStartAck((v) => !v)}
+            />
+          )}
+        </ScrollView>
 
-        <ToggleButton
-          isRunning={isRunning}
-          busy={busy}
-          disabled={!dndGranted && Platform.OS === 'android'}
-          onPress={toggleService}
-        />
-
-        {Platform.OS !== 'android' && (
-          <Text style={styles.platformNote}>
-            This app is Android-only — build it on a physical device.
-          </Text>
-        )}
+        <View style={styles.footer}>
+          <ToggleButton
+            isRunning={isRunning}
+            busy={busy}
+            disabled={startBlocked}
+            onPress={toggleService}
+          />
+          {startBlocked && <Text style={styles.footerHint}>{gateHint}</Text>}
+          {Platform.OS !== 'android' && (
+            <Text style={styles.platformNote}>
+              This app is Android-only — build it on a physical device.
+            </Text>
+          )}
+        </View>
       </SafeAreaView>
     </View>
   );
@@ -169,20 +223,82 @@ function StatusOrb({ phase }: { phase: Phase }) {
   );
 }
 
-function PermissionCard({ onPress }: { onPress: () => void }) {
+function CheckRow({
+  label,
+  detail,
+  ok,
+  onFix,
+}: {
+  label: string;
+  detail: string;
+  ok: boolean;
+  onFix: () => void;
+}) {
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.permitCard, pressed && styles.pressed]}
-    >
-      <Text style={styles.permitTitle}>Permission needed</Text>
-      <Text style={styles.permitBody}>
-        Grant “Do Not Disturb access” so Flip to Shhh can toggle DND for you.
-      </Text>
-      <View style={styles.permitCta}>
-        <Text style={styles.permitCtaText}>Open settings →</Text>
+    <View style={styles.checkRow}>
+      <View
+        style={[
+          styles.checkBadge,
+          { backgroundColor: ok ? C.activeSoft : C.shushSoft },
+        ]}
+      >
+        <Text style={{ color: ok ? C.active : C.shush, fontWeight: '800' }}>
+          {ok ? '✓' : '!'}
+        </Text>
       </View>
-    </Pressable>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.checkLabel}>{label}</Text>
+        <Text style={styles.checkDetail}>{detail}</Text>
+      </View>
+      {ok ? (
+        <Text style={styles.checkOk}>Granted</Text>
+      ) : (
+        <Pressable onPress={onFix} hitSlop={8}>
+          <Text style={styles.checkFix}>Fix →</Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+function OemCard({
+  manufacturer,
+  acked,
+  onOpen,
+  onToggleAck,
+}: {
+  manufacturer: string;
+  acked: boolean;
+  onOpen: () => void;
+  onToggleAck: () => void;
+}) {
+  const brand =
+    manufacturer && manufacturer.length > 1
+      ? manufacturer.charAt(0).toUpperCase() + manufacturer.slice(1).toLowerCase()
+      : 'Your device';
+  return (
+    <View style={styles.oemCard}>
+      <Text style={styles.oemTitle}>⚠️ One more step on {brand}</Text>
+      <Text style={styles.oemBody}>
+        {brand} can still close background apps even with battery unrestricted.
+        Open Auto-start (a.k.a. “Allow background activity” / “Don’t optimize”)
+        and enable it for Flip to Shhh.
+      </Text>
+
+      <Pressable
+        onPress={onOpen}
+        style={({ pressed }) => [styles.oemBtn, pressed && styles.pressed]}
+      >
+        <Text style={styles.oemBtnText}>Open Auto-start settings →</Text>
+      </Pressable>
+
+      <Pressable onPress={onToggleAck} style={styles.ackRow} hitSlop={8}>
+        <View style={[styles.ackBox, acked && styles.ackBoxOn]}>
+          {acked && <Text style={styles.ackTick}>✓</Text>}
+        </View>
+        <Text style={styles.ackText}>I’ve enabled Auto-start for this app</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -251,22 +367,70 @@ const styles = StyleSheet.create({
   orbLabel: { fontSize: 24, fontWeight: '700', marginTop: 8 },
   orbSub: { color: C.textDim, fontSize: 14 },
 
-  permitCard: {
+  reqCard: {
     marginTop: 32,
     backgroundColor: C.card,
     borderWidth: 1,
-    borderColor: C.accent,
+    borderColor: C.cardBorder,
     borderRadius: 18,
-    padding: 18,
-    gap: 8,
+    paddingHorizontal: 16,
   },
-  permitTitle: { color: C.text, fontSize: 16, fontWeight: '700' },
-  permitBody: { color: C.textDim, fontSize: 14, lineHeight: 20 },
-  permitCta: { marginTop: 4 },
-  permitCtaText: { color: C.accent, fontSize: 15, fontWeight: '700' },
+  reqDivider: { height: 1, backgroundColor: C.cardBorder },
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+  },
+  checkBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkLabel: { color: C.text, fontSize: 15, fontWeight: '600' },
+  checkDetail: { color: C.textDim, fontSize: 12, marginTop: 1 },
+  checkOk: { color: C.active, fontSize: 13, fontWeight: '700' },
+  checkFix: { color: C.accent, fontSize: 15, fontWeight: '700' },
 
-  permitOk: { marginTop: 32, alignItems: 'center' },
-  permitOkText: { color: C.active, fontSize: 14, fontWeight: '600' },
+  scroll: { flex: 1, alignSelf: 'stretch' },
+  scrollContent: { paddingBottom: 12 },
+
+  oemCard: {
+    marginTop: 16,
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.shush,
+    borderRadius: 18,
+    padding: 16,
+    gap: 12,
+  },
+  oemTitle: { color: C.text, fontSize: 15, fontWeight: '700' },
+  oemBody: { color: C.textDim, fontSize: 13, lineHeight: 19 },
+  oemBtn: {
+    backgroundColor: C.shushSoft,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  oemBtnText: { color: C.shush, fontSize: 14, fontWeight: '700' },
+  ackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  ackBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: C.cardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ackBoxOn: { backgroundColor: C.active, borderColor: C.active },
+  ackTick: { color: '#07090D', fontSize: 13, fontWeight: '900' },
+  ackText: { color: C.text, fontSize: 13, flex: 1 },
+
+  footer: { paddingTop: 12, gap: 8 },
+  footerHint: { color: C.textDim, fontSize: 12, textAlign: 'center' },
 
   toggle: {
     height: 60,

@@ -20,6 +20,9 @@ const FLIP_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.VIBRATE',
   'android.permission.POST_NOTIFICATIONS',
+  // Lets the app ask to be exempt from battery optimization, so OEM battery
+  // managers don't kill the service after it's swiped from recents.
+  'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
 ];
 
 // Fully-qualified name of the Kotlin service in the local module.
@@ -46,6 +49,8 @@ function addFlipService(androidManifest) {
         'android:enabled': 'true',
         'android:exported': 'false',
         'android:foregroundServiceType': 'specialUse',
+        // Keep the service running after the app is swiped from recents.
+        'android:stopWithTask': 'false',
       },
       // Required declaration for FOREGROUND_SERVICE_SPECIAL_USE on API 34+.
       property: [

@@ -16,6 +16,19 @@ class FlipToShhhModule extends NativeModule<FlipToShhhModuleEvents> {
     return false;
   }
   openDndSettings(): void {}
+  isIgnoringBatteryOptimizations(): boolean {
+    return false;
+  }
+  requestIgnoreBatteryOptimizations(): void {}
+  getManufacturer(): string {
+    return '';
+  }
+  hasAutoStartSettings(): boolean {
+    return false;
+  }
+  openAutoStartSettings(): boolean {
+    return false;
+  }
 }
 
 export default registerWebModule(FlipToShhhModule, 'FlipToShhhModule');

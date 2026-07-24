@@ -329,6 +329,13 @@ class FlipService : Service(), SensorEventListener {
     statusListener?.invoke(isRunning, isShushing)
   }
 
+  override fun onTaskRemoved(rootIntent: Intent?) {
+    // The app was swiped away from recents. Because the <service> is declared
+    // with stopWithTask="false", the system keeps this foreground service
+    // alive — so we deliberately do NOT stop here. Sensor listening continues.
+    super.onTaskRemoved(rootIntent)
+  }
+
   override fun onDestroy() {
     // Safety net: never leave the user stuck in DND if we're torn down.
     exitShush()

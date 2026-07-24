@@ -35,6 +35,31 @@ export function openDndSettings(): void {
   FlipToShhh.openDndSettings();
 }
 
+/** Whether the app is exempt from battery optimization / Doze. */
+export function isIgnoringBatteryOptimizations(): boolean {
+  return FlipToShhh.isIgnoringBatteryOptimizations();
+}
+
+/** Show the system dialog to exempt the app from battery optimization. */
+export function requestIgnoreBatteryOptimizations(): void {
+  FlipToShhh.requestIgnoreBatteryOptimizations();
+}
+
+/** Device manufacturer (e.g. "Xiaomi", "samsung", "Google"). */
+export function getManufacturer(): string {
+  return FlipToShhh.getManufacturer();
+}
+
+/** Whether this device exposes a known OEM auto-start / protected-app screen. */
+export function hasAutoStartSettings(): boolean {
+  return FlipToShhh.hasAutoStartSettings();
+}
+
+/** Open the OEM auto-start screen (App Info fallback). Returns true if OEM-specific. */
+export function openAutoStartSettings(): boolean {
+  return FlipToShhh.openAutoStartSettings();
+}
+
 /**
  * Subscribe to service status changes (start/stop and enter/leave Shhh mode).
  * Remember to call `.remove()` on the returned subscription on cleanup.
