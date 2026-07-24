@@ -1,56 +1,60 @@
-# Welcome to your Expo app 👋
+# Flip to Shhh 🤫
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A Pixel-inspired Android app: place your phone **face down** on a surface and it
+automatically enables **Do Not Disturb** with a short haptic pulse. Flip it back
+over (or pick it up) and your sound profile is restored.
 
-## Get started
+Built with **Expo SDK 57 / React Native 0.86** (New Architecture) + a custom
+**Kotlin Expo Module** running a persistent **foreground service**.
 
-1. Install dependencies
+## How it works
 
-   ```bash
-   npm install
-   ```
+| Layer | File | Role |
+| --- | --- | --- |
+| UI | `src/app/index.tsx` | Status, start/stop toggle, DND-permission gating |
+| TS API | `modules/flip-to-shhh/index.ts` | Typed wrappers + `onStatusChange` events |
+| Native bridge | `modules/.../FlipToShhhModule.kt` | Start/stop service, DND permission, deep-link |
+| Background | `modules/.../FlipService.kt` | Sensors + DND + haptics (survives screen-off) |
+| Config plugin | `plugins/withFlipToShhh.js` | Injects permissions + `<service>` on prebuild |
 
-2. Start the app
+### Low-power sensing strategy
+1. **Proximity** (`TYPE_PROXIMITY`, on-change) is the cheap gatekeeper. The
+   accelerometer stays unregistered until the sensor is covered.
+2. **Accelerometer** (`~5 Hz`) is registered only while covered, confirming a
+   true face-down pose (`Z ≤ -8.5 m/s²`) with hysteresis on exit.
+3. A short `PARTIAL_WAKE_LOCK` is held only while covered so sampling continues
+   with the screen off, then released immediately.
 
-   ```bash
-   npx expo start
-   ```
+## Prerequisites (local, no Android Studio)
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+This machine has JDK 17 + `ANDROID_HOME` set, but the **SDK packages are not yet
+installed**. Install command-line tools + the required packages once:
 
 ```bash
-npm run reset-project
+# 1. Command-line tools + platform-tools (adb) via Homebrew
+brew install --cask android-commandlinetools
+
+# 2. Point ANDROID_HOME at Homebrew's location (add to ~/.zshrc)
+export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+
+# 3. Accept licenses and install the packages this project targets (SDK 36)
+sdkmanager --licenses
+sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+> Prefer your existing `~/Library/Android/sdk`? Install the same packages there
+> instead and leave `ANDROID_HOME` pointing at it.
 
-### Other setup steps
+## Run on a physical device
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+# Connect the phone over USB, enable USB debugging, then confirm it's visible:
+adb devices
 
-## Learn more
+# Compile the dev build and deploy directly to the device (NO emulator):
+npx expo run:android --device
+```
 
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+On first launch: tap **Open settings** to grant *Do Not Disturb access*, return
+to the app, then **Start service**. Lay the phone face down to trigger Shhh.
