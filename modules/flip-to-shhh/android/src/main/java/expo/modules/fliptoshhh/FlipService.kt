@@ -20,21 +20,23 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
+import kotlin.math.abs
 
 /**
  * Long-lived foreground service that implements "Flip to Shhh".
  *
- * Power strategy (mirrors Pixel's implementation):
- *   1. PROXIMITY (on-change, wake-up) is the cheap gatekeeper. It fires only
- *      when something covers/uncovers the sensor. The accelerometer is *not*
- *      registered until proximity is covered.
- *   2. ACCELEROMETER (low frequency, ~5 Hz) is registered only while covered,
- *      to confirm the phone is actually face-down (Z gravity strongly negative)
- *      rather than, say, in a pocket.
- *
- * When both conditions hold we enable Do Not Disturb + a short haptic pulse.
- * When the phone is flipped back (or uncovered) we restore the previous
- * interruption filter.
+ * Power strategy (mirrors Pixel's implementation) — layered sensor gating so
+ * the CPU can sleep in the steady state:
+ *   1. PROXIMITY (on-change, wake-up) is the cheap always-on gatekeeper. It
+ *      fires only when something covers/uncovers the sensor. The accelerometer
+ *      is *not* registered until proximity is covered.
+ *   2. ACCELEROMETER (~5 Hz) runs only during the brief evaluation window while
+ *      covered, to confirm a flat, face-down pose. It is bounded by
+ *      EVAL_MAX_SAMPLES so a pocket can't keep it (and the wake lock) alive.
+ *   3. Once silenced, the accelerometer is UNREGISTERED and the wake lock is
+ *      released. While the phone sits face-down, only the on-change proximity
+ *      sensor is armed — near-zero cost. The flip back is detected when
+ *      proximity goes FAR, which triggers restoring the interruption filter.
  */
 class FlipService : Service(), SensorEventListener {
 
@@ -48,10 +50,21 @@ class FlipService : Service(), SensorEventListener {
     // Accelerometer sampling: 5 Hz => 200_000 microseconds between samples.
     private const val ACCEL_SAMPLING_US = 200_000
 
-    // Z-axis gravity thresholds (m/s^2). Face-down => gravity points into the
-    // screen => Z ~ -9.8. Hysteresis prevents flip-flapping near the boundary.
-    private const val FACE_DOWN_ENTER_Z = -8.5f
-    private const val FACE_DOWN_EXIT_Z = -6.5f
+    // Gravity thresholds (m/s^2). Lying flat & face-down on a surface puts
+    // almost all of gravity on -Z (~ -9.8) with near-zero X/Y tilt. A phone in
+    // a pocket is tilted and/or moving, so it won't sustain this pose.
+    private const val FACE_DOWN_ENTER_Z = -9.2f   // near-flat, screen straight down
+    private const val FLAT_XY_MAX = 3.0f           // max allowed side/end tilt
+
+    // Require the flat-face-down pose to hold for several consecutive samples
+    // (~0.8s at 5 Hz) before silencing, so pocketing the phone — which briefly
+    // passes through many orientations — doesn't trigger it.
+    private const val REQUIRED_FACE_DOWN_SAMPLES = 4
+
+    // If the sensor stays covered but never settles flat (e.g. in a pocket),
+    // stop the high-rate sampling after ~15s (75 samples @ 5 Hz) and release
+    // the wake lock. We resume only on the next proximity change.
+    private const val EVAL_MAX_SAMPLES = 75
 
     /** True while the service is alive. Read from JS via the module. */
     @Volatile
@@ -82,6 +95,13 @@ class FlipService : Service(), SensorEventListener {
   private var proximityCovered = false
   private var accelRegistered = false
 
+  // Consecutive flat-face-down samples seen so far (debounce, see companion).
+  private var faceDownSamples = 0
+
+  // Total accelerometer samples since it was (re)registered — bounds the
+  // evaluation window so we don't sample forever while covered (see companion).
+  private var evalSamples = 0
+
   // Interruption filter to restore when we leave Shhh mode.
   private var savedInterruptionFilter = NotificationManager.INTERRUPTION_FILTER_ALL
 
@@ -93,8 +113,8 @@ class FlipService : Service(), SensorEventListener {
     accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
     val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-    // Held only while the phone is covered, so the CPU can sample the
-    // accelerometer even with the screen off. Released as soon as uncovered.
+    // Held ONLY during the accelerometer evaluation window, so it can sample
+    // with the screen off. Released as soon as we silence, give up, or uncover.
     wakeLock = powerManager.newWakeLock(
       PowerManager.PARTIAL_WAKE_LOCK,
       "FlipToShhh::EvaluationWakeLock"
@@ -134,6 +154,8 @@ class FlipService : Service(), SensorEventListener {
     sensorManager.unregisterListener(this)
     accelRegistered = false
     proximityCovered = false
+    faceDownSamples = 0
+    evalSamples = 0
     releaseWakeLock()
 
     isRunning = false
@@ -169,19 +191,43 @@ class FlipService : Service(), SensorEventListener {
     } else {
       unregisterAccelerometer()
       releaseWakeLock()
+      faceDownSamples = 0
       // Uncovering means it was picked up / removed from the surface.
       exitShush()
     }
   }
 
   private fun handleAccelerometer(event: SensorEvent) {
+    // The accelerometer only runs during the short evaluation window (proximity
+    // NEAR, not yet shushing). Once we silence, it is unregistered — the flip
+    // back is detected by the on-change proximity sensor, not by polling here.
+    if (isShushing) return
+
+    val x = event.values[0]
+    val y = event.values[1]
     val z = event.values[2]
 
-    if (!isShushing && proximityCovered && z <= FACE_DOWN_ENTER_Z) {
-      enterShush()
-    } else if (isShushing && z >= FACE_DOWN_EXIT_Z) {
-      // Flipped back face-up (or tilted upright) while still on the surface.
-      exitShush()
+    // Lying flat AND face down: strong -Z gravity with little X/Y tilt.
+    // The tilt check is what rejects a phone sitting angled in a pocket.
+    val flatFaceDown =
+      z <= FACE_DOWN_ENTER_Z && abs(x) <= FLAT_XY_MAX && abs(y) <= FLAT_XY_MAX
+
+    if (flatFaceDown) {
+      faceDownSamples++
+      if (faceDownSamples >= REQUIRED_FACE_DOWN_SAMPLES) {
+        enterShush()
+        return
+      }
+    } else {
+      // Any wobble/tilt resets the debounce — a pocket rarely holds the pose.
+      faceDownSamples = 0
+    }
+
+    // Give up sampling if it stays covered but never settles flat, so we don't
+    // hold the CPU awake indefinitely (e.g. a phone riding in a pocket).
+    if (++evalSamples >= EVAL_MAX_SAMPLES) {
+      unregisterAccelerometer()
+      releaseWakeLock()
     }
   }
 
@@ -192,6 +238,9 @@ class FlipService : Service(), SensorEventListener {
     accelerometer?.let {
       sensorManager.registerListener(this, it, ACCEL_SAMPLING_US)
       accelRegistered = true
+      // Fresh evaluation window each time we start sampling.
+      faceDownSamples = 0
+      evalSamples = 0
     }
   }
 
@@ -208,10 +257,20 @@ class FlipService : Service(), SensorEventListener {
     if (!notificationManager.isNotificationPolicyAccessGranted) return
 
     savedInterruptionFilter = notificationManager.currentInterruptionFilter
-    notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY)
+    // ALARMS = silence everything (calls, notifications) except alarms.
+    // PRIORITY would let calls from starred contacts / repeat callers ring,
+    // which defeats the point of "Shhh".
+    notificationManager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS)
 
     vibratePulse()
     isShushing = true
+
+    // Battery: we're silenced and the phone will sit flat for a long time, so
+    // stop the high-rate accelerometer and drop the wake lock. Only the
+    // on-change proximity sensor stays armed; it fires (FAR) when the phone is
+    // flipped or lifted, which is what drives exitShush().
+    unregisterAccelerometer()
+    releaseWakeLock()
 
     updateNotification(shushing = true)
     notifyStatus()
@@ -316,11 +375,19 @@ class FlipService : Service(), SensorEventListener {
   // --- Wake lock -------------------------------------------------------------
 
   private fun acquireWakeLock() {
-    wakeLock?.let { if (!it.isHeld) it.acquire(10 * 60 * 1000L /* 10 min safety cap */) }
+    // Never let a wake-lock issue crash the sensor thread — the feature still
+    // works while the screen is on even if the lock can't be acquired.
+    try {
+      wakeLock?.let { if (!it.isHeld) it.acquire(10 * 60 * 1000L /* 10 min safety cap */) }
+    } catch (_: Throwable) {
+    }
   }
 
   private fun releaseWakeLock() {
-    wakeLock?.let { if (it.isHeld) it.release() }
+    try {
+      wakeLock?.let { if (it.isHeld) it.release() }
+    } catch (_: Throwable) {
+    }
   }
 
   // --- Misc ------------------------------------------------------------------

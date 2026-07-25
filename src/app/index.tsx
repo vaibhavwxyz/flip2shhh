@@ -187,21 +187,18 @@ function StatusOrb({ phase }: { phase: Phase }) {
   const map = {
     inactive: {
       ring: C.cardBorder,
-      glow: 'transparent',
       label: 'Inactive',
       sub: 'Service is off',
       icon: '🌙',
     },
     active: {
       ring: C.active,
-      glow: C.activeSoft,
       label: 'Watching',
       sub: 'Waiting for face-down',
       icon: '📡',
     },
     shushing: {
       ring: C.shush,
-      glow: C.shushSoft,
       label: 'Shhh',
       sub: 'Do Not Disturb is on',
       icon: '🤫',
@@ -210,7 +207,7 @@ function StatusOrb({ phase }: { phase: Phase }) {
 
   return (
     <View style={styles.orbWrap}>
-      <View style={[styles.orbGlow, { backgroundColor: map.glow }]}>
+      <View style={styles.orbGlow}>
         <View style={[styles.orb, { borderColor: map.ring }]}>
           <Text style={styles.orbIcon}>{map.icon}</Text>
         </View>

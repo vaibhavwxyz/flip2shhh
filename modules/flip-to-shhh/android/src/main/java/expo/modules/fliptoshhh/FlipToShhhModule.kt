@@ -111,6 +111,9 @@ class FlipToShhhModule : Module() {
         action = FlipService.ACTION_STOP
       }
       context.startService(intent)
+      // startService() returns a ComponentName which Expo can't serialize;
+      // end on Unit so this function's return type is Unit.
+      Unit
     }
 
     // --- Do Not Disturb permission ------------------------------------------

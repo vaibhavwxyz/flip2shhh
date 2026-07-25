@@ -20,6 +20,9 @@ const FLIP_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE_SPECIAL_USE',
   'android.permission.VIBRATE',
   'android.permission.POST_NOTIFICATIONS',
+  // Held briefly while the phone is face-down so the accelerometer keeps
+  // sampling with the screen off. Without this, acquire() throws and crashes.
+  'android.permission.WAKE_LOCK',
   // Lets the app ask to be exempt from battery optimization, so OEM battery
   // managers don't kill the service after it's swiped from recents.
   'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
